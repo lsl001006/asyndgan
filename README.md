@@ -40,6 +40,14 @@ In CVPR 2020 [[bibtex]](docs/bibtex)
 
 - Download the BraTS 2018 dataset: https://www.med.upenn.edu/sbia/brats2018/data.html
 - Split BraTs18 dataset use data/preprocess/split_build_brats_data.py 
+  
+## Run
+  `python train.py --dataroot ./datasets/BRATS/splitedH5 
+--dataset_mode brats_split --gpu_ids 1 --batch_size 1 
+--name bratsTest0929_test --model asyndgan --direction BtoA --num_netD 10`
+
+or use
+`source train.sh`
 
 ## Acknowledgments
 Our code borrows heavily from the the pix2pix implementation [pytorch-CycleGAN-and-pix2pix](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/.)
