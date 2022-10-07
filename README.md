@@ -36,6 +36,8 @@ In CVPR 2020 [[bibtex]](docs/bibtex)
 - visdom 0.1.8.8
 - pillow 5.4.1
 
+(or use conda environment `fed`)
+
 ## Dataset build:
 
 - Download the BraTS 2018 dataset: https://www.med.upenn.edu/sbia/brats2018/data.html
