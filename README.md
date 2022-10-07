@@ -41,6 +41,7 @@ In CVPR 2020 [[bibtex]](docs/bibtex)
 - Download the BraTS 2018 dataset: https://www.med.upenn.edu/sbia/brats2018/data.html
 - Split dataset into training/validation/testing as the following script: https://github.com/tommy-qichang/AsynDGAN/files/5703602/brats_dataset_build.py.txt
 - Split the training dataset into 10 subsets based on the segmentation volume size. 
+- 
 
 ## Acknowledgments
 Our code borrows heavily from the the pix2pix implementation [pytorch-CycleGAN-and-pix2pix](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/.)

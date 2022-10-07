@@ -15,8 +15,8 @@ train_split = {0: ['Brats18_2013_23_1', 'Brats18_CBICA_AAL_1', 'Brats18_CBICA_AO
 test_split = {0:['Brats18_2013_10_1', 'Brats18_2013_14_1', 'Brats18_2013_21_1', 'Brats18_2013_25_1', 'Brats18_2013_3_1', 'Brats18_2013_7_1', 'Brats18_CBICA_AAG_1', 'Brats18_CBICA_ABB_1', 'Brats18_CBICA_AME_1', 'Brats18_CBICA_APY_1', 'Brats18_CBICA_AQA_1', 'Brats18_CBICA_AQO_1', 'Brats18_CBICA_AQY_1', 'Brats18_CBICA_ASN_1', 'Brats18_CBICA_ASV_1', 'Brats18_CBICA_AVJ_1', 'Brats18_CBICA_AVV_1', 'Brats18_CBICA_AXM_1', 'Brats18_CBICA_AXQ_1', 'Brats18_CBICA_AYI_1', 'Brats18_CBICA_AYU_1', 'Brats18_CBICA_AZH_1', 'Brats18_CBICA_BFB_1', 'Brats18_CBICA_BFP_1', 'Brats18_CBICA_BHK_1', 'Brats18_TCIA01_180_1', 'Brats18_TCIA01_190_1', 'Brats18_TCIA01_390_1', 'Brats18_TCIA01_429_1', 'Brats18_TCIA01_448_1', 'Brats18_TCIA02_151_1', 'Brats18_TCIA02_274_1', 'Brats18_TCIA02_283_1', 'Brats18_TCIA02_370_1', 'Brats18_TCIA02_374_1', 'Brats18_TCIA02_430_1', 'Brats18_TCIA02_455_1', 'Brats18_TCIA02_605_1', 'Brats18_TCIA03_133_1', 'Brats18_TCIA04_111_1', 'Brats18_TCIA05_277_1', 'Brats18_TCIA06_211_1']}
 
 def split_data(split_type="train"):
-    path = "/home/lsl/Research/asyndgan/datasets/brats18/HGG"
-    dst = f"/home/lsl/Research/asyndgan/datasets/BRATS/tumor_split_{split_type}"
+    path = "../../datasets/brats18/HGG"
+    dst = f"../../datasets/BRATS/tumor_split_{split_type}"
     if not os.path.exists(dst):
         os.mkdir(dst)
     if split_type == 'train':
@@ -53,9 +53,9 @@ def split_data(split_type="train"):
     print("finished!")
 
 def build_data(data_type="train"):
-    path = "/home/lsl/Research/asyndgan/datasets/BRATS/tumor_split"
+    path = "../../datasets/BRATS/tumor_split"
     assert os.path.exists(path)
-    dst = "/home/lsl/Research/asyndgan/datasets/BRATS/splitedH5"
+    dst = "../../datasets/BRATS/splitedH5"
     if not os.path.exists(dst):
         os.mkdir(dst)
     
