@@ -37,8 +37,20 @@ from data import create_dataset
 from models import create_model
 from options.test_options import TestOptions
 from util import html
-from util.visualizer import save_images
+from torchvision.utils import save_image
+import torch
+import pdb
 
+@torch.no_grad()
+def transform(syn_img, real_img, mean=[0.5,0.5,0.5], std=[0.5,0.5,0.5]):
+    m, s = torch.tensor(mean, device=syn_img.device), torch.tensor(std, device=syn_img.device)
+    m, s = m.view(3,1,1), s.view(3,1,1)
+    syn_img = syn_img*s+m
+    real_img = real_img*s+m
+
+    syn_img = syn_img.mul(255).add_(0.5).clamp_(0, 255).to(torch.uint8)
+    real_img = real_img.mul(255).add_(0.5).clamp_(0, 255).to(torch.uint8)
+    return syn_img, real_img
 
 def save_data(gt, visuals, index, model, file, label_ternary, weight_map, append_idx=0):
 
@@ -56,15 +68,30 @@ def save_data(gt, visuals, index, model, file, label_ternary, weight_map, append
     # syn_img = (syn_img + 1) * (255 / 2)
     # syn_img = syn_img.astype("uint8")
     # label_ternary = np.moveaxis(label_ternary.cpu().numpy(), -1, 0)
+    
+    syn_img, real_img = transform(syn_img, real_img, mean=[0.5,0.5,0.5], std=[0.5,0.5,0.5])
+
     syn_img = np.moveaxis(syn_img.cpu().numpy(), 0, -1)
     label = np.moveaxis(label.cpu().numpy(), 0, -1)
     real_img = np.moveaxis(real_img.cpu().numpy(), 0, -1)
 
+    # # visualize
+    # s_i = Image.fromarray(syn_img)
+    # s_i.save("1.png")
+    # r_i = Image.fromarray(real_img)
+    # r_i.save("1_r.png")
+    # l_t = Image.fromarray(label_ternary.data.cpu().numpy())
+    # l_t.save("1_l.png")
+    # pdb.set_trace()
+    # # l = Image.fromarray(label)
+    # l.save("1_lable.png")
+    
+
     file.create_dataset(f"images/{img_path[0]}_{index}_{append_idx}", data=syn_img)
     file.create_dataset(f"labels/{img_path[0]}_{index}_{append_idx}", data=label)
     file.create_dataset(f"reference_real_image_please_dont_use/{img_path[0]}_{index}_{append_idx}", data=real_img)
-    file.create_dataset(f"label_ternary/{img_path[0]}_{index}_{append_idx}", data=label_ternary)
-    file.create_dataset(f"weight_map/{img_path[0]}_{index}_{append_idx}", data=weight_map.cpu().numpy())
+    file.create_dataset(f"labels_ternary/{img_path[0]}_{index}_{append_idx}", data=label_ternary.data.cpu().numpy())
+    file.create_dataset(f"weight_maps/{img_path[0]}_{index}_{append_idx}", data=weight_map.cpu().numpy())
 
     # misc.imsave(f"imgs/test/{img_path[0]}_{index}_img.png",
     #             np.moveaxis(syn_img.cpu().squeeze().numpy(), 0, -1))

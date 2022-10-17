@@ -45,10 +45,11 @@ def save_data(gt, visuals, index, model, file):
         print("skip this seg")
         return
 
-    real_img = visuals['real_B'][index]
-    syn_img = visuals['fake_B'][index]
-    label = visuals['real_A'][index]
+    real_img = visuals['real_B_2'][index]
+    syn_img = visuals['fake_B_2'][index]
+    label = visuals['real_A_2'][index]
 
+    
     img_path = model.get_image_paths()  # get image paths
 
     gt = gt[index].cpu().squeeze().numpy()
@@ -70,10 +71,13 @@ def save_data(gt, visuals, index, model, file):
     gt = Image.fromarray(gt)
     gt = np.array(gt.resize((240,240), resample=Image.BILINEAR))
 
-    file.create_dataset(f"images/{img_path[0]}_{index}", data=syn_img)
-    file.create_dataset(f"labels/{img_path[0]}_{index}", data=gt)
-    file.create_dataset(f"labels_with_skull/{img_path[0]}_{index}", data=label.cpu().numpy())
-    file.create_dataset(f"reference_real_image_please_dont_use/{img_path[0]}_{index}", data=real_img.cpu().numpy())
+    try:
+        file.create_dataset(f"images/{img_path[0]}_{index}", data=syn_img)
+        file.create_dataset(f"labels/{img_path[0]}_{index}", data=gt)
+        file.create_dataset(f"labels_with_skull/{img_path[0]}_{index}", data=label.cpu().numpy())
+        file.create_dataset(f"reference_real_image_please_dont_use/{img_path[0]}_{index}", data=real_img.cpu().numpy())
+    except ValueError:
+        print('Warning: dataset already exists')
 
     # misc.imsave(f"imgs/test/{img_path[0]}_{index}_img.png",
     #             np.moveaxis(syn_img.cpu().squeeze().numpy(), 0, -1))
@@ -117,8 +121,8 @@ if __name__ == '__main__':
         model.test()  # run inference
         visuals = model.get_current_visuals()  # get image results
         #
-        import pdb;pdb.set_trace()
-        gt = data['Seg']
+        # import pdb;pdb.set_trace()
+        gt = data['Seg_0'] # 还有Seg_1 ~ Seg_9
 
         for j in range(gt.shape[0]):
             sys.stdout.flush()

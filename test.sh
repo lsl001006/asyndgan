@@ -1,3 +1,3 @@
-python test.py --dataroot ./datasets/BRATS/splitedH5 \
---name bratsTest0929_test --model asyndgan --direction BtoA \
---gpu_ids 1 --batch_size 1 --dataset_mode brats_split --num_netD 2
+python save_syn.py --dataroot /home/lsl/Research/1sl/Datasets/BRATS/splitedH5 \
+--name bratsTest1012 --model asyndgan --netG unet_256 \
+--direction AtoB --dataset_mode brats_split --epoch latest --results_dir results/brats_asyndgan_withoutL1
