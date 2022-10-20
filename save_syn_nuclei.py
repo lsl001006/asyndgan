@@ -102,6 +102,7 @@ def save_data(gt, visuals, index, model, file, label_ternary, weight_map, append
 def launch_test_once(idx, model, file, label_ternary, weight_map):
     # test again.
     model.test()  # run inference
+    pdb.set_trace()
     visuals = model.get_current_visuals()  # get image results
     #
     gt = visuals['real_A']
@@ -135,7 +136,8 @@ if __name__ == '__main__':
     # db_name = "whole_syn_db_uint8.h5"
     # f = h5py.File(os.path.join(web_dir, db_name), 'w')
 
-    folder_name = f"Nuclei_Asyndgan_{opt.netG}_epoch{opt.epoch}"
+    # folder_name = f"Nuclei_Asyndgan_{opt.netG}_epoch{opt.epoch}"
+    folder_name = "dummy"
     # root_path = os.path.join(web_dir, folder_name)
     file = h5py.File(os.path.join(web_dir, f"{folder_name}.h5"), 'w')
 

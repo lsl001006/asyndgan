@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch.nn import init
 import functools
 from torch.optim import lr_scheduler
+import torch.nn.functional as F
 
 
 ###############################################################################
@@ -200,6 +201,45 @@ def define_D(input_nc, ndf, netD, n_layers_D=3, norm='batch', init_type='normal'
         net = PixelDiscriminator(input_nc, ndf, norm_layer=norm_layer)
     else:
         raise NotImplementedError('Discriminator model name [%s] is not recognized' % netD)
+    return init_net(net, init_type, init_gain, gpu_ids)
+
+def define_T(input_nc, output_nc, netT="UNet_seg", init_type='normal', init_gain=0.02, gpu_ids=[]):
+    """Create a teacher model
+
+    Parameters:
+        input_nc (int)     -- the number of channels in input images
+        ndf (int)          -- the number of filters in the first conv layer
+        netD (str)         -- the architecture's name: basic | n_layers | pixel
+        n_layers_D (int)   -- the number of conv layers in the discriminator; effective when netD=='n_layers'
+        norm (str)         -- the type of normalization layers used in the network.
+        init_type (str)    -- the name of the initialization method.
+        init_gain (float)  -- scaling factor for normal, xavier and orthogonal.
+        gpu_ids (int list) -- which GPUs the network runs on: e.g., 0,1,2
+
+    Returns a teacher
+
+    Our current implementation provides three types of discriminators:
+        [basic]: 'PatchGAN' classifier described in the original pix2pix paper.
+        It can classify whether 70×70 overlapping patches are real or fake.
+        Such a patch-level discriminator architecture has fewer parameters
+        than a full-image discriminator and can work on arbitrarily-sized images
+        in a fully convolutional fashion.
+
+        [n_layers]: With this mode, you cna specify the number of conv layers in the discriminator
+        with the parameter <n_layers_D> (default=3 as used in [basic] (PatchGAN).)
+
+        [pixel]: 1x1 PixelGAN discriminator can classify whether a pixel is real or not.
+        It encourages greater color diversity but has no effect on spatial statistics.
+
+    The discriminator has been initialized by <init_net>. It uses Leakly RELU for non-linearity.
+    """
+    net = None
+
+    if netT=="UNet_seg":  # default PatchGAN classifier
+        net = UNet_seg(input_nc, output_nc)
+    else:
+        raise NotImplementedError('Discriminator model name [%s] is not recognized' % netD)
+    
     return init_net(net, init_type, init_gain, gpu_ids)
 
 
@@ -613,3 +653,84 @@ class PixelDiscriminator(nn.Module):
     def forward(self, input):
         """Standard forward."""
         return self.net(input)
+
+class dilated_conv(nn.Module):
+    """ same as original conv if dilation equals to 1 """
+    def __init__(self, in_channel, out_channel, kernel_size=3, dropout_rate=0.0, activation=F.relu, dilation=1):
+        super().__init__()
+        self.conv = nn.Conv2d(in_channel, out_channel, kernel_size, padding=dilation, dilation=dilation)
+        self.norm = nn.BatchNorm2d(out_channel)
+        self.activation = activation
+        if dropout_rate > 0:
+            self.drop = nn.Dropout2d(p=dropout_rate)
+        else:
+            self.drop = lambda x: x  # no-op
+
+    def forward(self, x):
+        # CAB: conv -> activation -> batch normal
+        x = self.norm(self.activation(self.conv(x)))
+        x = self.drop(x)
+        return x
+
+
+class ConvDownBlock(nn.Module):
+    def __init__(self, in_channel, out_channel, dropout_rate=0.0, dilation=1):
+        super().__init__()
+        self.conv1 = dilated_conv(in_channel, out_channel, dropout_rate=dropout_rate, dilation=dilation)
+        self.conv2 = dilated_conv(out_channel, out_channel, dropout_rate=dropout_rate, dilation=dilation)
+        self.pool = nn.MaxPool2d(kernel_size=2)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.conv2(x)
+        return self.pool(x), x
+
+
+class ConvUpBlock(nn.Module):
+    def __init__(self, in_channel, out_channel, dropout_rate=0.0, dilation=1):
+        super().__init__()
+        self.up = nn.ConvTranspose2d(in_channel, in_channel // 2, 2, stride=2)
+        self.conv1 = dilated_conv(in_channel // 2 + out_channel, out_channel, dropout_rate=dropout_rate, dilation=dilation)
+        self.conv2 = dilated_conv(out_channel, out_channel, dropout_rate=dropout_rate, dilation=dilation)
+
+    def forward(self, x, x_skip):
+        x = self.up(x)
+        H_diff = x.shape[2] - x_skip.shape[2]
+        W_diff = x.shape[3] - x_skip.shape[3]
+        x_skip = F.pad(x_skip, (0, W_diff, 0, H_diff), mode='reflect')
+        x = torch.cat([x, x_skip], 1)
+        x = self.conv1(x)
+        x = self.conv2(x)
+        return x
+
+
+class UNet_seg(nn.Module):
+    def __init__(self, in_c=3, out_c=1):
+        super().__init__()
+        # down conv
+        self.c1 = ConvDownBlock(in_c, 64)
+        self.c2 = ConvDownBlock(64, 128)
+        self.c3 = ConvDownBlock(128, 256)
+        self.c4 = ConvDownBlock(256, 512)
+        self.cu = ConvDownBlock(512, 1024)
+        # up conv
+        self.u5 = ConvUpBlock(1024, 512)
+        self.u6 = ConvUpBlock(512, 256)
+        self.u7 = ConvUpBlock(256, 128)
+        self.u8 = ConvUpBlock(128, 64)
+        # final conv
+        self.ce = nn.Conv2d(64, out_c, kernel_size=1)
+
+    def forward(self, x):
+        x, c1 = self.c1(x)
+        x, c2 = self.c2(x)
+        x, c3 = self.c3(x)
+        x, c4 = self.c4(x)
+        _, x = self.cu(x)
+        x = F.dropout(x, p=0.5, training=self.training)
+        x = self.u5(x, c4)
+        x = self.u6(x, c3)
+        x = self.u7(x, c2)
+        x = self.u8(x, c1)
+        x = self.ce(x)
+        return x

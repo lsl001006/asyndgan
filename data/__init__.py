@@ -58,6 +58,25 @@ def create_dataset(opt):
     dataset = data_loader.load_data()
     return dataset
 
+def create_valid_dataset(opt):
+    """Create a dataset given the option.
+
+    This function wraps the class CustomDatasetDataLoader.
+        This is the main interface between this package and 'train.py'/'test.py'
+
+    Example:
+        >>> from data import create_dataset
+        >>> dataset = create_dataset(opt)
+    """
+    dataset_mode = opt.dataset_mode
+    opt.dataset_mode = opt.valid_dataset_mode
+
+    data_loader = CustomDatasetDataLoader(opt)
+    dataset = data_loader.load_data()
+    
+    opt.dataset_mode = dataset_mode
+    return dataset
+
 
 class CustomDatasetDataLoader():
     """Wrapper class of Dataset class that performs multi-threaded data loading"""
