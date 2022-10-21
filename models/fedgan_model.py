@@ -97,7 +97,7 @@ class FedGANModel(BaseModel):
             self.netT = []
             for i in range(self.num_netD):
                 self.netT.append(networks.define_T(opt.T_input_nc, opt.T_output_nc, opt.netT,
-                                                    opt.init_type, opt.init_gain, self.gpu_ids))
+                                                    opt.init_type, opt.init_gain, self.gpu_ids).eval())
             self.load_pretrainedT(opt)
             
 
@@ -106,6 +106,7 @@ class FedGANModel(BaseModel):
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)
             self.criterionL1 = torch.nn.L1Loss()
             self.criterionSeg = nn.NLLLoss(reduction='none')
+            self.criterionDistill = nn.KLDivLoss(reduction='none', log_target=True)
 
             # initialize optimizers; schedulers will be automatically created by function <BaseModel.setup>.
             self.optimizer_G = torch.optim.Adam(self.netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
@@ -175,6 +176,32 @@ class FedGANModel(BaseModel):
         # self.fake_B = self.netG(self.real_A)  # G(A)
         self.fake_B_2 = self.fake_B[0]
         self.fake_B_7 = self.fake_B[1]
+
+    def forward_teacher_outs(self, images):
+        """the prediction logits by teachers
+        Args:
+            images (tensor): input images
+            localN (int): number of local teachers. Defaults to None.
+
+        Returns:
+            tensor: the original teacher logits
+        """
+        def renormalize(images, m1=[0.5,0.5,0.5], s1=[0.5,0.5,0.5], m2=[0.7442, 0.5381, 0.6650], s2=[0.1580, 0.1969, 0.1504]):
+            '''the normalize parameter is different'between gan and seg'''
+            m1,s1 = torch.tensor(m1).to(self.device).view(-1,1,1), torch.tensor(s1).to(self.device).view(-1,1,1)
+            m2,s2 = torch.tensor(m2).to(self.device).view(-1,1,1), torch.tensor(s2).to(self.device).view(-1,1,1)
+            images = images*s1+m1
+            images = (images-m2)/s2
+            return images
+
+        images = renormalize(images)
+        total_logits = []
+        for i in range(len(self.netT)):
+            logits = self.netT[i](images)
+            total_logits.append(logits)
+        total_logits = torch.stack(total_logits)  # nlocal*batch*channel*H*W
+            
+        return total_logits
 
     def backward_D(self):
         """Calculate GAN loss for the discriminator"""
@@ -275,6 +302,9 @@ class FedGANModel(BaseModel):
         # self.loss_G.backward()
 
     def backward_S(self):
+        # specify the training losses you want to print out. The training/test scripts will call <BaseModel.get_current_losses>
+        self.loss_names = ['G_GAN_all', 'G_L1_all', 'G_perceptual_all', 'D_real_all', 'D_fake_all', 'S_SUP', 'S_DISTILL', 'S_ALL']
+
         weight_map = torch.cat(self.weight_map, 0)
         input = torch.cat(self.fake_B, 0)
         label = torch.cat(self.label, 0)
@@ -284,12 +314,24 @@ class FedGANModel(BaseModel):
         if label.dim() == 4:
             label = label.squeeze(1)
         
+        # supervision loss
         output = self.netS(input)
         log_prob_maps = F.log_softmax(output, dim=1)
         loss_map = self.criterionSeg(log_prob_maps, label)
         loss_map *= weight_map
-        self.loss_S = loss_map.mean()
-        self.loss_S.backward()
+        self.loss_S_SUP = loss_map.mean()
+
+        # distillation loss
+        with torch.no_grad():
+            output_teachers = self.forward_teacher_outs(input)
+            ensemble_output_teachers = self.ensemble_locals(output_teachers)
+        loss_distill = self.criterionDistill(F.log_softmax(output), F.log_softmax(ensemble_output_teachers))
+        loss_distill = loss_distill.sum(1)*weight_map
+        self.loss_S_DISTILL = loss_distill.mean()
+        
+
+        self.loss_S_ALL = self.loss_S_SUP + self.loss_S_DISTILL
+        self.loss_S_ALL.backward()
 
 
     def optimize_parameters(self):
@@ -316,6 +358,23 @@ class FedGANModel(BaseModel):
             self.backward_S()
             self.optimizer_S.step()
 
+    def ensemble_locals(self, locals, localweight=None):
+        """
+        locals: (nlocal, batch, ncls) or (nlocal, batch/ncls) or (nlocal)
+        * self.local_weight[localid]
+        """
+        if localweight==None:
+            localweight = torch.ones(len(locals)).to(self.device)
+
+        if len(locals.shape) == 5:  # [n_locals, B, C, H, W]
+            localweight = localweight.view(-1,1,1,1,1)
+            ensembled = (locals * localweight).sum(dim=0)
+        elif len(locals.shape) == 1: # gan_loss
+            ensembled = (locals * localweight).sum()  # 1
+        else:
+            pdb.set_trace()
+
+        return ensembled
 
     def split_forward(self, model, input, size, overlap, outchannel=3):
         '''
@@ -367,54 +426,57 @@ class FedGANModel(BaseModel):
         :param epoch: Integer, current training epoch.
         :return: A log that contains information about validation
         """
-        model = self.netS
-        model.eval()
+        if self.epoch<=self.opt.warm_up:
+            return
+        else:
+            model = self.netS
+            model.eval()
 
-        acc = AverageMeter('acc@1', ':6.2f')
-        dice = AverageMeter('dice', ':6.2f')
-        aji = AverageMeter('aji', ':6.2f')
-        meters = [acc, dice, aji]
-        self.isbest = False
-        
-        with torch.no_grad():
-            for batch_idx, batch_data in enumerate(valid_dataset):
-                data, weight_map, target, instance_label = batch_data['B'].to(self.device), batch_data['weight_map'].to(self.device), batch_data['label_ternary'].to(self.device), batch_data['instance_label'].to(self.device)
-                
-                if weight_map.dim() == 4:
-                    weight_map = weight_map.squeeze(1)
-                if target.dim() == 4:
-                    target = target.squeeze(1)
-                if target.max() == 255:
-                    target /= 255
+            acc = AverageMeter('acc@1', ':6.2f')
+            dice = AverageMeter('dice', ':6.2f')
+            aji = AverageMeter('aji', ':6.2f')
+            meters = [acc, dice, aji]
+            self.isbest = False
+            
+            with torch.no_grad():
+                for batch_idx, batch_data in enumerate(valid_dataset):
+                    data, weight_map, target, instance_label = batch_data['B'].to(self.device), batch_data['weight_map'].to(self.device), batch_data['label_ternary'].to(self.device), batch_data['instance_label'].to(self.device)
+                    
+                    if weight_map.dim() == 4:
+                        weight_map = weight_map.squeeze(1)
+                    if target.dim() == 4:
+                        target = target.squeeze(1)
+                    if target.max() == 255:
+                        target /= 255
 
-                # output = self.model(data)
-                output = self.split_forward(model, data, 256, 80)
-                log_prob_maps = F.log_softmax(output, dim=1)
-                
-                loss_map = self.criterionSeg(log_prob_maps, target)
-                loss_map *= weight_map
-                loss = loss_map.mean()
+                    # output = self.model(data)
+                    output = self.split_forward(model, data, 256, 80)
+                    log_prob_maps = F.log_softmax(output, dim=1)
+                    
+                    loss_map = self.criterionSeg(log_prob_maps, target)
+                    loss_map *= weight_map
+                    loss = loss_map.mean()
 
-                pred = torch.argmax(output, dim=1).detach().cpu().numpy()
-                pred_inside = pred == 1
-                instance_label = instance_label.detach().cpu().numpy()
-                for k in range(data.size(0)):
-                    pred_inside[k] = morph.remove_small_objects(pred_inside[k], 20)  # remove small object
-                    pred[k] = measure.label(pred_inside[k])  # connected component labeling
-                    pred[k] = morph.dilation(pred[k], selem=morph.disk(2))
-                    instance_label[k] = measure.label(instance_label[k])
+                    pred = torch.argmax(output, dim=1).detach().cpu().numpy()
+                    pred_inside = pred == 1
+                    instance_label = instance_label.detach().cpu().numpy()
+                    for k in range(data.size(0)):
+                        pred_inside[k] = morph.remove_small_objects(pred_inside[k], 20)  # remove small object
+                        pred[k] = measure.label(pred_inside[k])  # connected component labeling
+                        pred[k] = morph.dilation(pred[k], selem=morph.disk(2))
+                        instance_label[k] = measure.label(instance_label[k])
 
-                for i, met in enumerate(self.test_metric_ftns):
-                    meters[i].update(met(pred, instance_label, istrain=False), output.size(0))
-        
-        print(
-        ' [Eval] Epoch={current_epoch} Acc@1={acc.avg:.4f} dice={dice.avg:.4f} aji={aji.avg:.4f}'
-        .format(current_epoch=self.epoch, acc=acc, dice=dice, aji=aji))
-        
-        if aji.avg > self.best_seg_performance[-1]:
-            self.isbest = True
-            self.best_seg_performance = [acc.avg, dice.avg, aji.avg]
-        print(
-        ' [Eval] Best: Acc@1={:.4f} dice={:.4f} aji={:.4f}'
-        .format(*self.best_seg_performance))
+                    for i, met in enumerate(self.test_metric_ftns):
+                        meters[i].update(met(pred, instance_label, istrain=False), output.size(0))
+            
+            print(
+            ' [Eval] Epoch={current_epoch} Acc@1={acc.avg:.4f} dice={dice.avg:.4f} aji={aji.avg:.4f}'
+            .format(current_epoch=self.epoch, acc=acc, dice=dice, aji=aji))
+            
+            if aji.avg > self.best_seg_performance[-1]:
+                self.isbest = True
+                self.best_seg_performance = [acc.avg, dice.avg, aji.avg]
+            print(
+            ' [Eval] Best: Acc@1={:.4f} dice={:.4f} aji={:.4f}'
+            .format(*self.best_seg_performance))
 
