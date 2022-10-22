@@ -57,7 +57,10 @@ class FedGANModel(BaseModel):
             parser.add_argument('--delta_perceptual', type=float, default=1.0, help='weight for perceptual loss')
 
             parser.add_argument('--lambda_G', type=float, default=0.1, help='weight for asyndgan G ')
+            parser.add_argument('--lambda_G_adv', type=float, default=0, help='weight of loss_G_ADV for asyndgan D')
+            parser.add_argument('--lambda_G_align', type=float, default=1, help='weight of loss_G_align for asyndgan D')
             parser.add_argument('--lambda_D', type=float, default=0.05, help='weight for asyndgan D')
+            parser.add_argument('--lambda_S_distill', type=float, default=1, help='weight for asyndgan D')
 
             parser.add_argument('--warm-up', type=int, default=100, help='warm-up epochs for netS')
 
@@ -73,7 +76,7 @@ class FedGANModel(BaseModel):
         self.num_netD = opt.num_netD
         # specify the training losses you want to print out. The training/test scripts will call <BaseModel.get_current_losses>
         # self.loss_names = ['G_GAN', 'G_L1', 'G_Seg', 'D_real', 'D_fake']
-        self.loss_names = ['G_GAN_all', 'G_L1_all', 'G_perceptual_all', 'D_real_all', 'D_fake_all']
+        self.loss_names = ['G_GAN_all', 'G_L1_all', 'G_perceptual_all', 'G_ADV_all', 'G_align_all', 'D_real_all', 'D_fake_all', 'S_SUP', 'S_DISTILL', 'S_ALL']
         # specify the images you want to save/display. The training/test scripts will call <BaseModel.get_current_visuals>
         self.visual_names = ['real_A_2', 'fake_B_2', 'real_B_2','real_A_7', 'fake_B_7', 'real_B_7']
         # specify the models you want to save to the disk. The training/test scripts will call <BaseModel.save_networks> and <BaseModel.load_networks>
@@ -121,7 +124,7 @@ class FedGANModel(BaseModel):
 
             self.vgg_model = vgg16_feat().cuda()
             self.criterion_perceptual = perceptual_loss()
-            # self.unet = setup_unet().cuda()
+            self.initial_Loss()
         
         self.test_metric_ftns = [accuracy, dice, aji]
         self.best_seg_performance = [-1, -1, -1]
@@ -134,6 +137,11 @@ class FedGANModel(BaseModel):
             checkpoint = torch.load(teacher_ckpt_path)
             teacher.module.load_state_dict(checkpoint)
             print(teacher_ckpt_path, "loaded")
+
+    def initial_Loss(self):
+        '''initial losses to be zero'''
+        for loss in self.loss_names:
+            setattr(self, 'loss_'+loss, 0)
 
     def set_epoch(self, epoch):
         self.epoch = epoch
@@ -250,6 +258,7 @@ class FedGANModel(BaseModel):
         self.loss_G_GAN = []
         self.loss_G_L1 = []
         self.loss_G_perceptual = []
+        self.loss_G_align = []
 
         # for i in range(10):
         for i in range(self.num_netD):
@@ -276,7 +285,25 @@ class FedGANModel(BaseModel):
                 self.loss_G_L1_all += self.loss_G_L1[i]
                 self.loss_G_perceptual_all += self.loss_G_perceptual[i]
 
-        self.loss_G = (self.loss_G_GAN_all + self.loss_G_L1_all + self.loss_G_perceptual_all)*self.opt.lambda_G #0.1
+        if self.epoch>=self.opt.warm_up:
+            weight_map = torch.cat(self.weight_map, 0)
+            input = torch.cat(self.fake_B, 0)
+            label = torch.cat(self.label, 0)
+
+            if weight_map.dim() == 4:
+                weight_map = weight_map.squeeze(1)
+            if label.dim() == 4:
+                label = label.squeeze(1)
+            output_teachers = self.forward_teacher_outs(input)
+            ensemble_output_teachers = self.ensemble_locals(output_teachers)
+            output = self.netS(input)
+            loss_adv = -1 * self.criterionDistill(F.log_softmax(output,1), F.log_softmax(ensemble_output_teachers,1))
+            loss_adv = loss_adv.sum(1)*weight_map
+            self.loss_G_ADV_all = loss_adv.mean() * self.opt.lambda_G_adv
+            loss_align = -(F.softmax(ensemble_output_teachers,1) * F.log_softmax(ensemble_output_teachers, 1)).sum(1).mean() * self.opt.lambda_G_align 
+            self.loss_G_align_all = loss_align 
+
+        self.loss_G = (self.loss_G_GAN_all + self.loss_G_L1_all + self.loss_G_perceptual_all + self.loss_G_ADV_all + self.loss_G_align_all)*self.opt.lambda_G #0.1
         self.loss_G.backward()
 
         # # First, G(A) should fake the discriminator
@@ -302,9 +329,6 @@ class FedGANModel(BaseModel):
         # self.loss_G.backward()
 
     def backward_S(self):
-        # specify the training losses you want to print out. The training/test scripts will call <BaseModel.get_current_losses>
-        self.loss_names = ['G_GAN_all', 'G_L1_all', 'G_perceptual_all', 'D_real_all', 'D_fake_all', 'S_SUP', 'S_DISTILL', 'S_ALL']
-
         weight_map = torch.cat(self.weight_map, 0)
         input = torch.cat(self.fake_B, 0)
         label = torch.cat(self.label, 0)
@@ -325,7 +349,7 @@ class FedGANModel(BaseModel):
         with torch.no_grad():
             output_teachers = self.forward_teacher_outs(input)
             ensemble_output_teachers = self.ensemble_locals(output_teachers)
-        loss_distill = self.criterionDistill(F.log_softmax(output), F.log_softmax(ensemble_output_teachers))
+        loss_distill = self.criterionDistill(F.log_softmax(output, dim=1), F.log_softmax(ensemble_output_teachers, dim=1))
         loss_distill = loss_distill.sum(1)*weight_map
         self.loss_S_DISTILL = loss_distill.mean()
         
@@ -352,7 +376,7 @@ class FedGANModel(BaseModel):
         self.backward_G()                   # calculate graidents for G
         self.optimizer_G.step()             # udpate G's weights
 
-        if self.epoch>self.opt.warm_up:
+        if self.epoch>=self.opt.warm_up:
             self.forward()
             self.optimizer_S.zero_grad()
             self.backward_S()
@@ -363,6 +387,8 @@ class FedGANModel(BaseModel):
         locals: (nlocal, batch, ncls) or (nlocal, batch/ncls) or (nlocal)
         * self.local_weight[localid]
         """
+        if isinstance(locals, list):
+            locals = torch.stack(locals, 0)
         if localweight==None:
             localweight = torch.ones(len(locals)).to(self.device)
 
@@ -426,7 +452,7 @@ class FedGANModel(BaseModel):
         :param epoch: Integer, current training epoch.
         :return: A log that contains information about validation
         """
-        if self.epoch<=self.opt.warm_up:
+        if self.epoch<self.opt.warm_up:
             return
         else:
             model = self.netS
