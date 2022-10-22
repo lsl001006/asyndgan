@@ -49,6 +49,7 @@ class FedGANModel(BaseModel):
         parser.add_argument('--T_input_nc', type=int, default=3, help='input channel of seg model')
         parser.add_argument('--T_output_nc', type=int, default=3, help='output channel of seg model')
         parser.add_argument('--teacher-ckpt', type=str, default='/data/repo/code/1sl/DFFKD_byx/nuclei_teachers', help='path to load teacher checkpoint')
+        parser.add_argument('--temperature', type=int, default=1, help='the temperature for distillation')
 
 
         if is_train:
@@ -349,9 +350,10 @@ class FedGANModel(BaseModel):
         with torch.no_grad():
             output_teachers = self.forward_teacher_outs(input)
             ensemble_output_teachers = self.ensemble_locals(output_teachers)
-        loss_distill = self.criterionDistill(F.log_softmax(output, dim=1), F.log_softmax(ensemble_output_teachers, dim=1))
+        T = self.opt.temperature
+        loss_distill = self.criterionDistill(F.log_softmax(output/T, dim=1), F.log_softmax(ensemble_output_teachers/T, dim=1))
         loss_distill = loss_distill.sum(1)*weight_map
-        self.loss_S_DISTILL = loss_distill.mean()
+        self.loss_S_DISTILL = loss_distill.mean() * self.opt.lambda_S_distill
         
 
         self.loss_S_ALL = self.loss_S_SUP + self.loss_S_DISTILL
