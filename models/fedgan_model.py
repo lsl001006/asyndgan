@@ -50,7 +50,7 @@ class FedGANModel(BaseModel):
         parser.add_argument('--T_output_nc', type=int, default=3, help='output channel of seg model')
         parser.add_argument('--teacher-ckpt', type=str, default='/data/repo/code/1sl/DFFKD_byx/nuclei_teachers', help='path to load teacher checkpoint')
         parser.add_argument('--temperature', type=int, default=1, help='the temperature for distillation')
-
+        parser.add_argument('--S_lr', type=float, default=None, help='the learning rate of student')
 
         if is_train:
             parser.set_defaults(pool_size=0, gan_mode='vanilla')
@@ -120,8 +120,11 @@ class FedGANModel(BaseModel):
                 opt_D = torch.optim.Adam(i.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
                 self.optimizer_D.append(opt_D)
                 self.optimizers.append(opt_D)
-            self.optimizer_S = torch.optim.Adam(self.netS.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
-            self.optimizers.append(self.optimizer_S)
+            if self.opt.S_lr:
+                self.optimizer_S = torch.optim.Adam(self.netS.parameters(), lr=opt.S_lr, betas=(opt.beta1, 0.999), weight_decay=1e-4, amsgrad=True)
+            else:
+                self.optimizer_S = torch.optim.Adam(self.netS.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999), weight_decay=1e-4, amsgrad=True)
+            # self.optimizers.append(self.optimizer_S)
 
             self.vgg_model = vgg16_feat().cuda()
             self.criterion_perceptual = perceptual_loss()
