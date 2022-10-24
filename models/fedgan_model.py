@@ -49,7 +49,7 @@ class FedGANModel(BaseModel):
         parser.add_argument('--T_input_nc', type=int, default=3, help='input channel of seg model')
         parser.add_argument('--T_output_nc', type=int, default=3, help='output channel of seg model')
         parser.add_argument('--teacher-ckpt', type=str, default='/data/repo/code/1sl/DFFKD_byx/nuclei_teachers', help='path to load teacher checkpoint')
-        parser.add_argument('--temperature', type=int, default=1, help='the temperature for distillation')
+        parser.add_argument('--temperature', type=float, default=1, help='the temperature for distillation')
         parser.add_argument('--S_lr', type=float, default=None, help='the learning rate of student')
 
         if is_train:
@@ -289,48 +289,27 @@ class FedGANModel(BaseModel):
                 self.loss_G_L1_all += self.loss_G_L1[i]
                 self.loss_G_perceptual_all += self.loss_G_perceptual[i]
 
-        if self.epoch>=self.opt.warm_up:
-            weight_map = torch.cat(self.weight_map, 0)
-            input = torch.cat(self.fake_B, 0)
-            label = torch.cat(self.label, 0)
+        # if self.epoch>=self.opt.warm_up:
+        #     weight_map = torch.cat(self.weight_map, 0)
+        #     input = torch.cat(self.fake_B, 0)
+        #     label = torch.cat(self.label, 0)
 
-            if weight_map.dim() == 4:
-                weight_map = weight_map.squeeze(1)
-            if label.dim() == 4:
-                label = label.squeeze(1)
-            output_teachers = self.forward_teacher_outs(input)
-            ensemble_output_teachers = self.ensemble_locals(output_teachers)
-            output = self.netS(input)
-            loss_adv = -1 * self.criterionDistill(F.log_softmax(output,1), F.log_softmax(ensemble_output_teachers,1))
-            loss_adv = loss_adv.sum(1)*weight_map
-            self.loss_G_ADV_all = loss_adv.mean() * self.opt.lambda_G_adv
-            loss_align = -(F.softmax(ensemble_output_teachers,1) * F.log_softmax(ensemble_output_teachers, 1)).sum(1).mean() * self.opt.lambda_G_align 
-            self.loss_G_align_all = loss_align 
+        #     if weight_map.dim() == 4:
+        #         weight_map = weight_map.squeeze(1)
+        #     if label.dim() == 4:
+        #         label = label.squeeze(1)
+        #     output_teachers = self.forward_teacher_outs(input)
+        #     ensemble_output_teachers = self.ensemble_locals(output_teachers)
+        #     self.netS.eval()
+        #     output = self.netS(input)
+        #     loss_adv = -1 * self.criterionDistill(F.log_softmax(output,1), F.log_softmax(ensemble_output_teachers,1))
+        #     loss_adv = loss_adv.sum(1)*weight_map
+        #     self.loss_G_ADV_all = loss_adv.mean() * self.opt.lambda_G_adv
+        #     self.loss_G_align_all = -(F.softmax(ensemble_output_teachers,1) * F.log_softmax(ensemble_output_teachers, 1)).sum(1).mean() * self.opt.lambda_G_align 
 
         self.loss_G = (self.loss_G_GAN_all + self.loss_G_L1_all + self.loss_G_perceptual_all + self.loss_G_ADV_all + self.loss_G_align_all)*self.opt.lambda_G #0.1
         self.loss_G.backward()
 
-        # # First, G(A) should fake the discriminator
-        # fake_AB = torch.cat((self.real_A, self.fake_B), 1)
-        # pred_fake = self.netD(fake_AB)
-        # self.loss_G_GAN = self.criterionGAN(pred_fake, True)
-        # # Second, G(A) = B
-        # self.loss_G_L1 = self.criterionL1(self.fake_B, self.real_B) * self.opt.lambda_L1
-        #
-        # pred_feat = self.vgg_model(self.fake_B)
-        # target_feat = self.vgg_model(self.real_B)
-        # self.loss_G_perceptual = self.criterion_perceptual(pred_feat, target_feat) * self.opt.delta_perceptual
-
-        # pred_seg = self.unet(self.fake_B)
-        #
-        # pred_seg = torch.sigmoid(pred_seg)
-        #
-        # self.loss_G_Seg = self.criterionSeg(pred_seg, self.seg)
-
-        # combine loss and calculate gradients
-        # self.loss_G = self.loss_G_GAN + self.loss_G_L1 + self.loss_G_Seg
-        # self.loss_G = self.loss_G_GAN + self.loss_G_L1 + self.loss_G_perceptual
-        # self.loss_G.backward()
 
     def backward_S(self):
         weight_map = torch.cat(self.weight_map, 0)
@@ -343,6 +322,7 @@ class FedGANModel(BaseModel):
             label = label.squeeze(1)
         
         # supervision loss
+        self.netS.train()
         output = self.netS(input)
         log_prob_maps = F.log_softmax(output, dim=1)
         loss_map = self.criterionSeg(log_prob_maps, label)
